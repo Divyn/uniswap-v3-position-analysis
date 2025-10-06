@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Uniswap V3 Mint/Burn Events - Interactive Chart</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            background-color: white;
+        }
+        #chart {
+            width: 100%;
+            height: 600px;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+        .stats {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .stat-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+            min-width: 150px;
+        }
+        .stat-card.mint {
+            border-left-color: #28a745;
+        }
+        .stat-card.burn {
+            border-left-color: #dc3545;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Uniswap V3 Mint/Burn Events - Interactive Analysis</h1>
+        
+        
+        <div class="controls">
+            <label for="tokenSelect">Select Token:</label>
+            <select id="tokenSelect">
+                <option value="all">All Tokens</option>
+            </select>
+            
+            <label for="pairSelect">Select Pair:</label>
+            <select id="pairSelect">
+                <option value="all">All Pairs</option>
+            </select>
+            
+            <label for="chartType">Chart Type:</label>
+            <select id="chartType">
+                <option value="fee-tier">Fee Tier Analysis</option>
+                <option value="bar">Bar Chart (Events by Token)</option>
+                <option value="pair-bar">Bar Chart (Events by Pair)</option>
+            </select>
+        </div>
+
+        <div id="chart" class="loading">Loading chart...</div>
+    </div>
+
+    <script>
+        let mintBurnData = [];
+        let tokenDecimals = {};
+
+        // Load data from the processed mint events file
+        async function loadData() {
+            try {
+                console.log('Loading data from bitquery_responses/processed_mint_events.json');
+                const response = await fetch('bitquery_responses/processed_mint_events.json');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                mintBurnData = await response.json();
+                console.log('Loaded', mintBurnData.length, 'mint events');
+                
+                // Debug: Check for data quality issues
+                const eventsWithPriceData = mintBurnData.filter(e => e.price_band && e.price_band.lower !== null);
+                console.log('Mint events:', mintBurnData.length);
+                console.log('Events with price data:', eventsWithPriceData.length);
+                
+                // Create token decimals lookup
+                mintBurnData.forEach(event => {
+                    tokenDecimals[event.token0.address] = {
+                        symbol: event.token0.symbol,
+                        decimals: event.token0.decimals
+                    };
+                    tokenDecimals[event.token1.address] = {
+                        symbol: event.token1.symbol,
+                        decimals: event.token1.decimals
+                    };
+                });
+                
+                // Populate filters
+                populateFilters();
+                
+                
+                // Initial chart
+                updateChart();
+                
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('chart').innerHTML = 
+                    '<div class="loading">Error loading data. Please make sure to run the mint/burn processing script first.</div>';
+            }
+        }
+
+        function populateFilters() {
+            const tokenSelect = document.getElementById('tokenSelect');
+            const pairSelect = document.getElementById('pairSelect');
+            
+            // Get unique tokens and pairs
+            const tokens = new Set();
+            const pairs = new Set();
+            
+            mintBurnData.forEach(event => {
+                tokens.add(event.token0.symbol);
+                tokens.add(event.token1.symbol);
+                
+                const pair = `${event.token0.symbol}/${event.token1.symbol}`;
+                pairs.add(pair);
+            });
+            
+            // Populate token filter
+            Array.from(tokens).sort().forEach(token => {
+                const option = document.createElement('option');
+                option.value = token;
+                option.textContent = token;
+                tokenSelect.appendChild(option);
+            });
+            
+            // Populate pair filter
+            Array.from(pairs).sort().forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair;
+                option.textContent = pair;
+                pairSelect.appendChild(option);
+            });
+        }
+
+
+        function getFilteredData() {
+            const token = document.getElementById('tokenSelect').value;
+            const pair = document.getElementById('pairSelect').value;
+            
+            return mintBurnData.filter(event => {
+                if (token !== 'all' && event.token0.symbol !== token && event.token1.symbol !== token) return false;
+                if (pair !== 'all') {
+                    const eventPair = `${event.token0.symbol}/${event.token1.symbol}`;
+                    if (eventPair !== pair) return false;
+                }
+                return true;
+            });
+        }
+
+        function updateChart() {
+            const filteredData = getFilteredData();
+            const chartType = document.getElementById('chartType').value;
+            
+            if (filteredData.length === 0) {
+                document.getElementById('chart').innerHTML = '<div class="loading">No data matches the selected filters.</div>';
+                return;
+            }
+            
+            let trace;
+            let layout;
+            
+            switch (chartType) {
+                case 'fee-tier':
+                    ({trace, layout} = createFeeTierChart(filteredData));
+                    break;
+                case 'bar':
+                    ({trace, layout} = createTokenBarChart(filteredData));
+                    break;
+                case 'pair-bar':
+                    ({trace, layout} = createPairBarChart(filteredData));
+                    break;
+                default:
+                    ({trace, layout} = createFeeTierChart(filteredData));
+            }
+            
+            Plotly.newPlot('chart', [trace], layout, {responsive: true});
+            
+            // Add click handler for fee tier chart
+            if (chartType === 'fee-tier') {
+                document.getElementById('chart').on('plotly_click', function(data) {
+                    if (data.points && data.points.length > 0) {
+                        const point = data.points[0];
+                        const feeTier = point.x.split(' ')[0]; // Extract fee number
+                        showFeeTierDetails(parseInt(feeTier), mintBurnData);
+                    }
+                });
+            }
+        }
+
+        function createFeeTierChart(data) {
+            // Group data by fee tier
+            const feeTierData = {};
+            
+            data.forEach(event => {
+                const fee = parseInt(event.fee);
+                if (!feeTierData[fee]) {
+                    feeTierData[fee] = {
+                        count: 0,
+                        totalAmount0: 0,
+                        totalAmount1: 0,
+                        totalUSD: 0,
+                        pairs: new Set(),
+                        avgAmount0: 0,
+                        avgAmount1: 0,
+                        avgUSD: 0,
+                        events: []
+                    };
+                }
+                
+                const amount0 = event.amounts.amount0_desired || 0;
+                const amount1 = event.amounts.amount1_desired || 0;
+                const usdValue = parseFloat(event.transaction.value_in_usd || 0);
+                const pair = `${event.token0.symbol}/${event.token1.symbol}`;
+                
+                feeTierData[fee].count++;
+                feeTierData[fee].totalAmount0 += amount0;
+                feeTierData[fee].totalAmount1 += amount1;
+                feeTierData[fee].totalUSD += usdValue;
+                feeTierData[fee].pairs.add(pair);
+                feeTierData[fee].events.push(event);
+            });
+            
+            // Calculate averages and prepare data
+            const feeTiers = Object.keys(feeTierData).map(fee => parseInt(fee)).sort((a, b) => a - b);
+            const counts = [];
+            const totalAmounts = [];
+            const avgAmounts = [];
+            const totalUSDs = [];
+            const pairCounts = [];
+            const hoverTexts = [];
+            
+            feeTiers.forEach(fee => {
+                const tier = feeTierData[fee];
+                tier.avgAmount0 = tier.count > 0 ? tier.totalAmount0 / tier.count : 0;
+                tier.avgAmount1 = tier.count > 0 ? tier.totalAmount1 / tier.count : 0;
+                tier.avgUSD = tier.count > 0 ? tier.totalUSD / tier.count : 0;
+                
+                counts.push(tier.count);
+                totalAmounts.push(tier.totalAmount0 + tier.totalAmount1);
+                avgAmounts.push(tier.avgAmount0 + tier.avgAmount1);
+                totalUSDs.push(tier.totalUSD);
+                pairCounts.push(tier.pairs.size);
+                
+                // Create detailed hover text
+                const feePercent = (fee / 10000 * 100).toFixed(2);
+                const topPairs = Array.from(tier.pairs).slice(0, 5).join(', ');
+                const morePairs = tier.pairs.size > 5 ? ` +${tier.pairs.size - 5} more` : '';
+                
+                hoverTexts.push(
+                    `<b>Fee Tier: ${fee} (${feePercent}%)</b><br>` +
+                    `Events: ${tier.count}<br>` +
+                    `Total Volume: ${(tier.totalAmount0 + tier.totalAmount1).toLocaleString()}<br>` +
+                    `Avg Volume: ${(tier.avgAmount0 + tier.avgAmount1).toFixed(2)}<br>` +
+                    `Total USD: $${tier.totalUSD.toLocaleString()}<br>` +
+                    `Avg USD: $${tier.avgUSD.toFixed(2)}<br>` +
+                    `Unique Pairs: ${tier.pairs.size}<br>` +
+                    `Top Pairs: ${topPairs}${morePairs}`
+                );
+            });
+            
+            // Create bar chart
+            const trace = {
+                x: feeTiers.map(fee => `${fee} (${(fee/10000*100).toFixed(2)}%)`),
+                y: counts,
+                type: 'bar',
+                marker: { 
+                    color: ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'],
+                    opacity: 0.8
+                },
+                text: hoverTexts,
+                hovertemplate: '%{text}<extra></extra>',
+                name: 'Event Count'
+            };
+            
+            const layout = {
+                title: 'Mint Events by Fee Tier',
+                xaxis: { 
+                    title: 'Fee Tier',
+                    tickangle: -45
+                },
+                yaxis: { 
+                    title: 'Number of Events',
+                    type: 'log'
+                },
+                hovermode: 'closest',
+                showlegend: false
+            };
+            
+            return { trace, layout };
+        }
+
+        function createTokenBarChart(data) {
+            const tokenCounts = {};
+            
+            data.forEach(event => {
+                tokenCounts[event.token0.symbol] = (tokenCounts[event.token0.symbol] || 0) + 1;
+                tokenCounts[event.token1.symbol] = (tokenCounts[event.token1.symbol] || 0) + 1;
+            });
+            
+            const trace = {
+                x: Object.keys(tokenCounts),
+                y: Object.values(tokenCounts),
+                type: 'bar',
+                marker: { color: 'lightblue' }
+            };
+            
+            const layout = {
+                title: 'Mint/Burn Events by Token',
+                xaxis: { title: 'Token' },
+                yaxis: { title: 'Number of Events' }
+            };
+            
+            return { trace, layout };
+        }
+
+        function createPairBarChart(data) {
+            const pairCounts = {};
+            
+            data.forEach(event => {
+                const pair = `${event.token0.symbol}/${event.token1.symbol}`;
+                pairCounts[pair] = (pairCounts[pair] || 0) + 1;
+            });
+            
+            const trace = {
+                x: Object.keys(pairCounts),
+                y: Object.values(pairCounts),
+                type: 'bar',
+                marker: { color: 'lightcoral' }
+            };
+            
+            const layout = {
+                title: 'Mint/Burn Events by Trading Pair',
+                xaxis: { title: 'Trading Pair' },
+                yaxis: { title: 'Number of Events' }
+            };
+            
+            return { trace, layout };
+        }
+
+
+        // Event listeners
+        document.getElementById('tokenSelect').addEventListener('change', updateChart);
+        document.getElementById('pairSelect').addEventListener('change', updateChart);
+        document.getElementById('chartType').addEventListener('change', updateChart);
+
+        function showFeeTierDetails(feeTier, allData) {
+            // Filter events for this fee tier
+            const feeTierEvents = allData.filter(event => parseInt(event.fee) === feeTier);
+            
+            // Create detailed analysis
+            const pairs = {};
+            const tokens = new Set();
+            let totalVolume0 = 0;
+            let totalVolume1 = 0;
+            let totalUSD = 0;
+            
+            feeTierEvents.forEach(event => {
+                const pair = `${event.token0.symbol}/${event.token1.symbol}`;
+                pairs[pair] = (pairs[pair] || 0) + 1;
+                tokens.add(event.token0.symbol);
+                tokens.add(event.token1.symbol);
+                totalVolume0 += event.amounts.amount0_desired || 0;
+                totalVolume1 += event.amounts.amount1_desired || 0;
+                totalUSD += parseFloat(event.transaction.value_in_usd || 0);
+            });
+            
+            // Sort pairs by frequency
+            const sortedPairs = Object.entries(pairs).sort((a, b) => b[1] - a[1]);
+            
+            // Create detailed HTML
+            const detailsHTML = `
+                <div style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+                           background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                           max-width: 80%; max-height: 80%; overflow-y: auto; z-index: 1000;">
+                    <h3>Fee Tier ${feeTier} (${(feeTier/10000*100).toFixed(2)}%) - Detailed Analysis</h3>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0;">
+                        <div>
+                            <h4>Summary</h4>
+                            <p><strong>Total Events:</strong> ${feeTierEvents.length}</p>
+                            <p><strong>Total Volume Token0:</strong> ${totalVolume0.toLocaleString()}</p>
+                            <p><strong>Total Volume Token1:</strong> ${totalVolume1.toLocaleString()}</p>
+                            <p><strong>Total USD Value:</strong> $${totalUSD.toLocaleString()}</p>
+                            <p><strong>Unique Tokens:</strong> ${tokens.size}</p>
+                            <p><strong>Unique Pairs:</strong> ${sortedPairs.length}</p>
+                        </div>
+                        
+                        <div>
+                            <h4>Top 10 Trading Pairs</h4>
+                            <ol style="max-height: 200px; overflow-y: auto;">
+                                ${sortedPairs.slice(0, 10).map(([pair, count]) => 
+                                    `<li>${pair}: ${count} events</li>`
+                                ).join('')}
+                            </ol>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 20px;">
+                        <h4>Recent Events (Last 10)</h4>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                            ${feeTierEvents.slice(0, 10).map(event => `
+                                <div style="border: 1px solid #ddd; padding: 10px; margin: 5px 0; border-radius: 5px;">
+                                    <strong>${event.token0.symbol}/${event.token1.symbol}</strong><br>
+                                    Amount0: ${(event.amounts.amount0_desired || 0).toFixed(6)}<br>
+                                    Amount1: ${(event.amounts.amount1_desired || 0).toFixed(6)}<br>
+                                    USD: $${parseFloat(event.transaction.value_in_usd || 0).toFixed(2)}<br>
+                                    Time: ${new Date(event.block.time).toLocaleString()}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    
+                    <button onclick="this.parentElement.remove()" 
+                            style="margin-top: 20px; padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                        Close
+                    </button>
+                </div>
+            `;
+            
+            // Add overlay
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                background: rgba(0,0,0,0.5); z-index: 999;
+            `;
+            overlay.innerHTML = detailsHTML;
+            overlay.onclick = function(e) {
+                if (e.target === overlay) overlay.remove();
+            };
+            
+            document.body.appendChild(overlay);
+        }
+
+        // Load data when page loads
+        loadData();
+    </script>
+</body>
+</html>
