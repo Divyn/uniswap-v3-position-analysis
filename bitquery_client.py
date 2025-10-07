@@ -8,7 +8,7 @@ from typing import Dict
 from config import BITQUERY_OAUTH_TOKEN, BITQUERY_STREAMING_ENDPOINT
 
 
-class BitqueryClient:
+class BitQueryClient:
     """Client for interacting with Bitquery GraphQL API"""
 
     def __init__(self):
@@ -336,6 +336,146 @@ class BitqueryClient:
             "endDate": end_date,
             "limit": limit
         })
+
+    def get_historical_burn_events(self, start_date: str, end_date: str, limit: int = 2000) -> Dict:
+        """Get historical burn events for Uniswap V3 positions"""
+        query = """
+        query HistoricalBurnEvents($startDate: String!, $endDate: String!, $limit: Int!) {
+          EVM(dataset: archive, network: eth) {
+            Calls(
+              where: {
+                Call: {
+                  Signature: { Name: { is: "burn" } }
+                  To: { is: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88" }
+                }
+                Block: { Date: { after: $startDate, before: $endDate } }
+              }
+              limit: { count: $limit }
+              orderBy: { descending: Block_Number }
+            ) {
+              Arguments {
+                Index
+                Name
+                Type
+                Path {
+                  Name
+                  Index
+                }
+                Value {
+                  ... on EVM_ABI_Address_Value_Arg {
+                    address
+                  }
+                  ... on EVM_ABI_BigInt_Value_Arg {
+                    bigInteger
+                  }
+                  ... on EVM_ABI_Bytes_Value_Arg {
+                    hex
+                  }
+                  ... on EVM_ABI_Boolean_Value_Arg {
+                    bool
+                  }
+                  ... on EVM_ABI_String_Value_Arg {
+                    string
+                  }
+                  ... on EVM_ABI_Integer_Value_Arg {
+                    integer
+                  }
+                }
+              }
+              Call {
+                Signature {
+                  Name
+                }
+                To
+                Value
+                ValueInUSD
+                From
+              }
+              Transaction {     
+                From
+                To
+                Hash
+                ValueInUSD
+                Value
+                Time
+              }
+              Block {
+                Number
+                Time
+              }
+            }
+          }
+        }
+        """
+        return self.execute_query(query, {"startDate": start_date, "endDate": end_date, "limit": limit}) 
+
+    def get_recent_burn_events_realtime(self, limit: int = 2000) -> Dict:
+        """Get recent burn events from realtime database"""
+        query = """
+        query RecentBurnEventsRealtime($limit: Int!) {
+          EVM(network: eth) {
+            Calls(
+              where: {
+                Call: {
+                  Signature: { Name: { is: "burn" } }
+                  To: { is: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88" }
+                }
+              }
+              limit: { count: $limit }
+              orderBy: { descending: Block_Number }
+            ) {
+              Arguments {
+                Index
+                Name
+                Type
+                Path {
+                  Name
+                  Index
+                }
+                Value {
+                  ... on EVM_ABI_Address_Value_Arg {
+                    address
+                  }
+                  ... on EVM_ABI_BigInt_Value_Arg {
+                    bigInteger
+                  }
+                  ... on EVM_ABI_Bytes_Value_Arg {
+                    hex
+                  }
+                  ... on EVM_ABI_Boolean_Value_Arg {
+                    bool
+                  }
+                  ... on EVM_ABI_String_Value_Arg {
+                    string
+                  }
+                  ... on EVM_ABI_Integer_Value_Arg {
+                    integer
+                  }
+                }
+              }
+              Call {
+                Signature {
+                  Name
+                }
+                To        
+              }
+              Transaction {
+                From
+                To
+                Hash
+                ValueInUSD
+                Value
+                Time
+              }
+              Block {
+                Number
+                Time
+              }
+            }
+          }
+        }
+        """
+        return self.execute_query(query, {"limit": limit})  
 
     def get_recent_mint_events_realtime(self, limit: int = 2000) -> Dict:
         """Get recent mint events from realtime database"""
