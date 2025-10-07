@@ -47,6 +47,12 @@ A streamlined tool for tracking Uniswap V3 liquidity positions and extracting to
    python extract_token_decimals.py
    ```
 
+7. **Analyse burn events**
+```
+python3 main.py burn
+
+```
+
 7. **View visualizations:**
    - **Positions**: Open `positions_chart.html` in browser
    - **Mint Events**: Open `mint_burn_chart.html` in browser
